@@ -1,0 +1,25 @@
+storage_root = "~/Photos"
+
+[[outputs]]
+format = "jpeg"
+quality = 90
+icc = "sRGB.icc"
+
+[[outputs]]
+format = "jpeg"
+quality = 95
+icc = "AdobeRGB1998.icc"
+
+[[outputs]]
+format = "png"
+bit_depth = 16
+icc = "AdobeRGB1998.icc"
+
+[[outputs]]
+format = "tiff"
+bit_depth = 16
+compression = "lzw"
+icc = "ProPhoto.icc"
+
+[metadata]
+copy_exif = true
