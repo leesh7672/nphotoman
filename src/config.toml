@@ -1,16 +1,19 @@
 storage_root = "~/Photos"
 
 [[outputs]]
+suffix = "sRGB"
 format = "jpeg"
 quality = 90
 icc = "sRGB.icc"
 
 [[outputs]]
+suffix = "sRGB"
 format = "jpeg"
 quality = 95
 icc = "AdobeRGB1998.icc"
 
 [[outputs]]
+suffix = "AdobeRGB"
 format = "png"
 bit_depth = 16
 icc = "AdobeRGB1998.icc"

@@ -24,7 +24,6 @@ END OF TERMS
 
 ******************************************************************************/
 
-use bytemuck;
 use image::{
     EncodableLayout, ExtendedColorType, ImageEncoder,
     codecs::{jpeg::JpegEncoder, png::PngEncoder},
@@ -40,7 +39,9 @@ use std::{
     env,
     fs::{self, File, create_dir_all},
     io::{BufWriter, Read, Write},
+    ops::Deref,
     path::{Path, PathBuf},
+    u8,
 };
 use walkdir::WalkDir;
 
@@ -54,18 +55,19 @@ const DEFAULT_CONFIG: &str = include_str!("config.toml");
 struct Config {
     storage_root: String,
     outputs: Vec<OutputConfig>,
+    #[cfg(feature = "exif")]
     metadata: Option<MetadataConfig>,
 }
 
 #[derive(Deserialize)]
 struct OutputConfig {
+    suffix: String,
     format: String,
     quality: Option<u8>,
-    bit_depth: Option<u8>,
-    compression: Option<String>,
     icc: Option<String>,
 }
 
+#[cfg(feature = "exif")]
 #[derive(Deserialize)]
 struct MetadataConfig {
     copy_exif: Option<bool>,
@@ -105,7 +107,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok();
 
     files.par_iter().for_each(|f| {
-        process_file(f, &base, &config).unwrap();
+        if let Err(err) = process_file(f, &base, &config) {
+            println!("Error occurred when processing {}: {}", f.display(), err)
+        }
     });
 
     Ok(())
@@ -145,13 +149,16 @@ fn process_file(
     println!("Processing {}", raw_path.display());
 
     // RAW decode
-    let mut raw = RawImage::open(raw_path.as_os_str().as_encoded_bytes()).unwrap();
+    let mut raw = RawImage::open(fs::read(raw_path).unwrap().as_bytes()).unwrap();
+    raw.set_use_camera_wb(true);
+    raw.set_use_camera_matrix(true);
+    raw.unpack().unwrap();
+
+    let width = raw.width() as usize;
+    let height = raw.height() as usize;
+
     let img = raw.process::<16>().unwrap();
-
-    let width = img.width();
-    let height = img.height();
-
-    let buf = img.as_bytes();
+    let buf: &[u16] = img.deref().iter().as_slice();
     let stem = raw_path.file_stem().unwrap().to_string_lossy();
 
     for out in &config.outputs {
@@ -162,8 +169,8 @@ fn process_file(
             None
         };
 
-        // COLOR TRANSFORM (lcms2)
-        let mut buf_out = vec![0u16; buf.len()];
+        let buf: Vec<u8> = buf.iter().flat_map(|e| e.to_ne_bytes()).collect();
+        let mut nbuf = vec![0u8; buf.len()];
         if let Some(ref icc) = icc_data {
             let transform = Transform::new(
                 &Profile::new_icc(icc)?,
@@ -172,14 +179,12 @@ fn process_file(
                 PixelFormat::RGB_16,
                 Intent::Perceptual,
             )?;
-            transform.transform_pixels(buf, &mut buf_out);
+            transform.transform_pixels(&buf, &mut nbuf);
         }
-
-        let buf8: Vec<u8> = buf.iter().map(|v| (v >> 8) as u8).collect();
 
         match out.format.as_str() {
             "jpeg" => {
-                let path = base.join(format!("{}_{}.jpg", stem, out.quality.unwrap_or(90)));
+                let path = base.join(format!("{}-{}.jpeg", stem, out.suffix));
                 let mut writer = BufWriter::new(File::create(&path)?);
                 let mut enc = JpegEncoder::new_with_quality(&mut writer, out.quality.unwrap_or(90));
 
@@ -187,31 +192,34 @@ fn process_file(
                     let _ = enc.set_icc_profile(icc.clone());
                 }
 
-                enc.write_image(&buf8, width, height, ExtendedColorType::Rgb8.into())?;
+                let mut nbuf8: Vec<u8> = nbuf
+                    .chunks_exact(2)
+                    .map(|e| (u16::from_ne_bytes([e[0], e[1]]) >> 8).try_into().unwrap())
+                    .collect();
+
+                enc.write_image(
+                    nbuf8.by_ref(),
+                    width.try_into().unwrap(),
+                    height.try_into().unwrap(),
+                    ExtendedColorType::Rgb8.into(),
+                )?;
                 copy_metadata(raw_path, &path, config)?;
             }
 
             "png" => {
-                let path = base.join(format!("{}.png", stem));
+                let path = base.join(format!("{}-suffix.png", stem, out.suffix));
                 let mut enc = PngEncoder::new(File::create(&path)?);
 
                 if let Some(ref icc) = icc_data {
                     let _ = enc.set_icc_profile(icc.clone());
                 }
 
-                let raw = bytemuck::cast_slice(&buf);
-
-                enc.write_image(raw, width, height, ExtendedColorType::Rgb16.into())?;
-            }
-
-            "tiff" => {
-                use tiff::encoder::*;
-
-                let path = base.join(format!("{}.tiff", stem));
-                let mut tiff = TiffEncoder::new(File::create(&path)?).unwrap();
-                let image = tiff.new_image::<colortype::RGB16>(width, height)?;
-                let raw = bytemuck::cast_slice(&buf);
-                image.write_data(raw)?;
+                enc.write_image(
+                    nbuf.by_ref(),
+                    width.try_into().unwrap(),
+                    height.try_into().unwrap(),
+                    ExtendedColorType::Rgb16.into(),
+                )?;
             }
 
             _ => {}
