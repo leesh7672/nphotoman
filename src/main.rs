@@ -207,7 +207,7 @@ fn process_file(
             }
 
             "png" => {
-                let path = base.join(format!("{}-suffix.png", stem, out.suffix));
+                let path = base.join(format!("{}-{}.png", stem, out.suffix));
                 let mut enc = PngEncoder::new(File::create(&path)?);
 
                 if let Some(ref icc) = icc_data {
