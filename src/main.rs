@@ -158,7 +158,7 @@ fn process_file(
     let height = raw.height() as usize;
 
     let img = raw.process::<16>().unwrap();
-    let buf: &[u16] = img.deref().iter().as_slice();
+    let buf: Vec<u8> = img.deref().iter().flat_map(|e| e.to_ne_bytes()).collect();
     let stem = raw_path.file_stem().unwrap().to_string_lossy();
 
     for out in &config.outputs {
@@ -169,7 +169,6 @@ fn process_file(
             None
         };
 
-        let buf: Vec<u8> = buf.iter().flat_map(|e| e.to_ne_bytes()).collect();
         let mut nbuf = vec![0u8; buf.len()];
         if let Some(ref icc) = icc_data {
             let transform = Transform::new(
