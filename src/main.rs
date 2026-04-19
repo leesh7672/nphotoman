@@ -25,7 +25,7 @@ END OF TERMS
 ******************************************************************************/
 
 use image::{
-    EncodableLayout, ExtendedColorType, ImageEncoder,
+    ExtendedColorType, ImageEncoder,
     codecs::{jpeg::JpegEncoder, png::PngEncoder},
 };
 use lcms2::{Intent, PixelFormat, Profile, Transform};
@@ -38,7 +38,7 @@ use serde::Deserialize;
 use std::{
     env,
     fs::{self, File, create_dir_all},
-    io::{BufWriter, Read, Write},
+    io::{self, BufWriter, Read, Write},
     ops::Deref,
     path::{Path, PathBuf},
     u8,
@@ -119,7 +119,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn load_or_create_config() -> Result<Config, Box<dyn std::error::Error>> {
     let home = dirs::home_dir().ok_or("No home directory")?;
-    let cfg_dir = home.join(".nphoto");
+    let cfg_dir = home.join(".nphotoman");
     let cfg_file = cfg_dir.join("config.toml");
 
     if !cfg_dir.exists() {
@@ -149,17 +149,32 @@ fn process_file(
     println!("Processing {}", raw_path.display());
 
     // RAW decode
-    let mut raw = RawImage::open(fs::read(raw_path).unwrap().as_bytes()).unwrap();
+    let result: Result<Vec<u8>, io::Error> = fs::read(raw_path);
+    if let Err(err) = result {
+        return Result::Err(err.into());
+    }
+    let result = &result.unwrap();
+    let result = RawImage::open(result);
+    if let Err(err) = result {
+        return Result::Err(err.into());
+    }
+
+    let mut raw = result.unwrap();
     raw.set_use_camera_wb(true);
     raw.set_use_camera_matrix(true);
-    raw.unpack().unwrap();
+    raw.as_mut().params.output_color = 4;
+    raw.unpack()?;
 
     let width = raw.width() as usize;
     let height = raw.height() as usize;
+    let result = raw.process::<16>();
+    if let Err(err) = result {
+        return Result::Err(err.into());
+    }
 
-    let img = raw.process::<16>().unwrap();
+    let img = result.unwrap();
     let buf: Vec<u8> = img.deref().iter().flat_map(|e| e.to_ne_bytes()).collect();
-    let stem = raw_path.file_stem().unwrap().to_string_lossy();
+    let stem = String::from(raw_path.file_stem().unwrap().to_str().unwrap());
 
     for out in &config.outputs {
         // ICC load
@@ -172,13 +187,15 @@ fn process_file(
         let mut nbuf = vec![0u8; buf.len()];
         if let Some(ref icc) = icc_data {
             let transform = Transform::new(
-                &Profile::new_icc(icc)?,
+                &Profile::new_icc(include_bytes!("ProPhoto-RGB.icc"))?,
                 PixelFormat::RGB_16,
                 &Profile::new_icc(icc)?,
                 PixelFormat::RGB_16,
                 Intent::Perceptual,
             )?;
             transform.transform_pixels(&buf, &mut nbuf);
+        } else {
+            nbuf.copy_from_slice(&buf);
         }
 
         match out.format.as_str() {
