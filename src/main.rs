@@ -76,16 +76,18 @@ struct MetadataConfig {
 // ================= MAIN =================
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    println!("COPYRIGHT 2026, Seho Lee.");
+
     let config = load_or_create_config()?;
 
     let args: Vec<String> = env::args().collect();
-    if args.len() < 2 {
-        println!("COPYRIGHT 2026, Seho Lee.");
-        println!("Usage: {} <name>", args[0]);
+    if args.len() < 3 {
+        println!("Usage: {} <name> <ext_of_raw_images>", args[0]);
         return Ok(());
     }
 
     let name = &args[1];
+    let ext = &args[2];
 
     let base = PathBuf::from(&config.storage_root).join(name);
     create_dir_all(&base)?;
@@ -96,7 +98,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .filter(|e| {
             e.path()
                 .extension()
-                .map_or(false, |e| e.eq_ignore_ascii_case("SRW"))
+                .map_or(false, |e| e.eq_ignore_ascii_case(ext))
         })
         .map(|e| e.into_path())
         .collect();
