@@ -245,7 +245,7 @@ fn generate_exif(image: &RawImage) -> Result<Vec<u8>, Box<dyn std::error::Error>
     let mut metadata = Metadata::new();
 
     if let Some(datetime) = info.datetime {
-        metadata.set_tag(ExifTag::CreateDate(datetime.to_rfc3339()));
+        metadata.set_tag(ExifTag::DateTimeOriginal(datetime.to_rfc3339()));
     }
 
     metadata.set_tag(ExifTag::ISOSpeed(vec![info.iso_speed]));
