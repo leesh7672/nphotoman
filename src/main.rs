@@ -257,12 +257,7 @@ fn copy_metadata(
     if let Some(meta_cfg) = &config.metadata {
         if meta_cfg.copy_exif.unwrap_or(false) {
             if let Ok(src_meta) = Metadata::new_from_path(src) {
-                if let Ok(mut dst_meta) = Metadata::new_from_path(dst) {
-                    if let Ok(exif) = src_meta.get_exif() {
-                        let _ = dst_meta.set_exif(&exif);
-                    }
-                    let _ = dst_meta.save_to_file(dst);
-                }
+                src_meta.save_to_file(dst)?
             }
         }
     }
