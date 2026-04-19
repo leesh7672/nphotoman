@@ -206,6 +206,8 @@ fn process_file(
                     let _ = enc.set_icc_profile(icc.clone());
                 }
 
+                enc.set_exif_metadata(generate_exif(&raw)?)?;
+
                 let mut nbuf8: Vec<u8> = nbuf
                     .chunks_exact(2)
                     .map(|e| (u16::from_ne_bytes([e[0], e[1]]) >> 8).try_into().unwrap())
