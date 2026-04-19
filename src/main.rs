@@ -29,7 +29,12 @@ use image::{
     codecs::{jpeg::JpegEncoder, png::PngEncoder},
 };
 use lcms2::{Intent, PixelFormat, Profile, Transform};
-use little_exif::{exif_tag::ExifTag, exif_tag_format::STRING, metadata::Metadata, rational::uR64};
+use little_exif::{
+    exif_tag::ExifTag,
+    exif_tag_format::STRING,
+    metadata::Metadata,
+    rational::{iR64, uR64},
+};
 use num_cpus::get;
 use rayon::{ThreadPoolBuilder, prelude::*};
 use rsraw::RawImage;
@@ -254,8 +259,28 @@ fn generate_exif(image: &RawImage) -> Result<Vec<u8>, Box<dyn std::error::Error>
         info.focal_len as f64,
     )]));
 
+    metadata.set_tag(ExifTag::ShutterSpeedValue(vec![iR64::from(
+        info.shutter as f64,
+    )]));
+
     metadata.set_tag(ExifTag::Make(info.make));
     metadata.set_tag(ExifTag::Model(info.model));
+
+    metadata.set_tag(ExifTag::GPSLatitude(vec![uR64::from(
+        info.gps.latitude[0] as f64
+            + (info.gps.latitude[1] as f64 / 60f64)
+            + (info.gps.latitude[2] as f64 / 3200f64),
+    )]));
+
+    metadata.set_tag(ExifTag::GPSLongitude(vec![uR64::from(
+        info.gps.longitude[0] as f64
+            + (info.gps.longitude[1] as f64 / 60f64)
+            + (info.gps.longitude[2] as f64 / 3200f64),
+    )]));
+
+    metadata.set_tag(ExifTag::GPSAltitude(vec![uR64::from(
+        info.gps.altitude as f64,
+    )]));
 
     metadata.set_tag(ExifTag::Software(STRING::from("nphotoman")));
 
