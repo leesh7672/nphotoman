@@ -29,10 +29,9 @@ use image::{
     codecs::{jpeg::JpegEncoder, png::PngEncoder},
 };
 use lcms2::{Intent, PixelFormat, Profile, Transform};
+use little_exif::{exif_tag::ExifTag, exif_tag_format::STRING, metadata::Metadata, rational::uR64};
 use num_cpus::get;
 use rayon::{ThreadPoolBuilder, prelude::*};
-#[cfg(feature = "exif")]
-use rexiv2::Metadata;
 use rsraw::RawImage;
 use serde::Deserialize;
 use std::{
@@ -55,8 +54,6 @@ const DEFAULT_CONFIG: &str = include_str!("config.toml");
 struct Config {
     storage_root: String,
     outputs: Vec<OutputConfig>,
-    #[cfg(feature = "exif")]
-    metadata: Option<MetadataConfig>,
 }
 
 #[derive(Deserialize)]
@@ -65,12 +62,6 @@ struct OutputConfig {
     format: String,
     quality: Option<u8>,
     icc: Option<String>,
-}
-
-#[cfg(feature = "exif")]
-#[derive(Deserialize)]
-struct MetadataConfig {
-    copy_exif: Option<bool>,
 }
 
 // ================= MAIN =================
@@ -221,7 +212,6 @@ fn process_file(
                     height.try_into().unwrap(),
                     ExtendedColorType::Rgb8.into(),
                 )?;
-                copy_metadata(raw_path, &path, config)?;
             }
 
             "png" => {
@@ -231,6 +221,8 @@ fn process_file(
                 if let Some(ref icc) = icc_data {
                     let _ = enc.set_icc_profile(icc.clone());
                 }
+
+                enc.set_exif_metadata(generate_exif(&raw)?)?;
 
                 enc.write_image(
                     nbuf.by_ref(),
@@ -248,28 +240,24 @@ fn process_file(
 }
 
 // ================= METADATA =================
-#[cfg(feature = "exif")]
-fn copy_metadata(
-    src: &Path,
-    dst: &Path,
-    config: &Config,
-) -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(meta_cfg) = &config.metadata {
-        if meta_cfg.copy_exif.unwrap_or(false) {
-            if let Ok(src_meta) = Metadata::new_from_path(src) {
-                src_meta.save_to_file(dst)?
-            }
-        }
+fn generate_exif(image: &RawImage) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let info = image.full_info();
+    let mut metadata = Metadata::new();
+
+    if let Some(datetime) = info.datetime {
+        metadata.set_tag(ExifTag::CreateDate(datetime.to_rfc3339()));
     }
 
-    Ok(())
-}
+    metadata.set_tag(ExifTag::ISOSpeed(vec![info.iso_speed]));
+    metadata.set_tag(ExifTag::FNumber(vec![uR64::from(info.aperture as f64)]));
+    metadata.set_tag(ExifTag::FocalLength(vec![uR64::from(
+        info.focal_len as f64,
+    )]));
 
-#[cfg(not(feature = "exif"))]
-fn copy_metadata(
-    _src: &Path,
-    _dst: &Path,
-    _config: &Config,
-) -> Result<(), Box<dyn std::error::Error>> {
-    Ok(())
+    metadata.set_tag(ExifTag::Make(info.make));
+    metadata.set_tag(ExifTag::Model(info.model));
+
+    metadata.set_tag(ExifTag::Software(STRING::from("nphotoman")));
+
+    Ok(metadata.encode()?)
 }
