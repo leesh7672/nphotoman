@@ -1,24 +1,31 @@
 # COPYRIGHT 2026, Seho Lee.
 #
-# THIS FILE IS PROVIDED BY THE COPYRIGHT HOLDERS UNDER THE FOLLOWING TERMS:
+# This file is provided by the copyright holders under the following terms:
 #
-# 1. ANY PERSON, GROUP, COMPANY, GOVERNMENT, OR OTHER LEGAL ENTITY THAT OBTAINS A
-#    COPY OF THIS FILE IS PERMITTED TO USE, REPRODUCE, MODIFY, AND DISTRIBUTE IT
-#    FOR ANY LAWFUL PURPOSE, INCLUDING COMMERCIAL USE.
+# - Any person, group, company, government body or other entity that obtains a
+#   copy of this file is permitted to use, copy, produce, modify and distribute it
+#   for any lawful purpose, including commercial use.
 #
-# 2. ANY REPRODUCTION, MODIFICATION, AND DISTRIBUTION OF THIS FILE MUST RETAIN THE
-#    COPYRIGHT NOTICE ABOVE. IF THIS FILE IS USED IN A PRODUCT, THE COPYRIGHT
-#    NOTICE MUST BE INCLUDED IN THE DOCUMENTATION OR OTHER MATERIALS PROVIDED
-#    WITH THE PRODUCT, WHERE REASONABLY PRACTICABLE.
+# - Any copy, production, modification and distribution of this file must retain
+#   the copyright notice above. If this file is used in a physical or digital
+#   product, the copyright notice must be included in the documents or other
+#   materials provided with the product, where reasonably practicable.
 #
-# 3. THIS FILE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-#    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-#    FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. TO THE MAXIMUM EXTENT
-#    PERMITTED BY APPLICABLE LAW, THE AUTHORS OR COPYRIGHT HOLDERS SHALL NOT BE
-#    LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY ARISING FROM, OUT OF, OR
-#    IN CONNECTION WITH THE USE OF THIS FILE.
+# - If anyone begins any patent action against any entity, including a cross-claim
+#   or counterclaim lawsuit, alleging that this file or the contribution within it
+#   infringes their patent, any patent licences and permissions granted to the
+#   claimant under this licence terminate as of the date that such patent action
+#   is filed.
 #
-# END OF TERMS
+# - This file is provided ‘As Is’ without any explicit or implied warranty. Any
+#   warranty, including the warranties of merchantability, fitness for a
+#   particular purpose and non-infringement, is not provided with this file. To
+#   the maximum extent permitted by applicable law, the authors or copyright
+#   holders shall not be liable for any claim, damages or other liabilities
+#   arising from the use of this file.
+#
+# End of Terms
+#
 
 [package]
 name = "nphotoman"

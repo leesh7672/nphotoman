@@ -1,4 +1,6 @@
 storage_root = "Photos"
+icc = "ProPhotoRGB.icc"
+color_space = 4
 
 [[outputs]]
 suffix = "sRGB"
