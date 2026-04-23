@@ -71,7 +71,6 @@ struct Config {
 
 #[derive(Deserialize)]
 struct OutputConfig {
-    suffix: String,
     format: String,
     quality: Option<u8>,
     icc: Option<String>,
@@ -81,7 +80,7 @@ struct OutputConfig {
 // ================= MAIN =================
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("COPYRIGHT 2026, Seho Lee.");
+    println!("Copyright 2026, Seho Lee.");
 
     let config = load_or_create_config()?;
 
@@ -97,7 +96,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let base = PathBuf::from(&config.storage_root).join(name);
     create_dir_all(&base)?;
 
-    let files: Vec<PathBuf> = WalkDir::new(env::current_dir().unwrap())
+    let files: Vec<PathBuf> = WalkDir::new(".")
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| {
@@ -210,20 +209,24 @@ fn process_file(
         let dir: String;
 
         if let Some(subdir) = &out.subdir {
-            path_subdir = raw_path.join(subdir);
+            path_subdir = PathBuf::from(base).join(subdir);
             create_dir_all(&path_subdir)?;
             dir = path_subdir.to_str().unwrap().to_string();
         } else {
-            dir = raw_path.to_str().unwrap().to_string();
+            dir = base.to_str().unwrap().to_string();
         }
 
         match out.format.as_str() {
             "jpeg" => {
                 let path = base.join(format!(
-                    "{}/{}-{}.jpeg",
+                    "{}/{}",
                     dir,
-                    raw_path.file_name().unwrap().display(),
-                    out.suffix
+                    raw_path
+                        .with_extension("jpeg")
+                        .file_name()
+                        .unwrap()
+                        .to_str()
+                        .unwrap()
                 ));
                 let mut writer = BufWriter::new(File::create(&path)?);
                 let mut enc = JpegEncoder::new_with_quality(&mut writer, out.quality.unwrap_or(90));
@@ -251,10 +254,14 @@ fn process_file(
 
             "png" => {
                 let path = base.join(format!(
-                    "{}/{}-{}.png",
+                    "{}/{}",
                     dir,
-                    raw_path.file_name().unwrap().display(),
-                    out.suffix
+                    raw_path
+                        .with_extension("png")
+                        .file_name()
+                        .unwrap()
+                        .to_str()
+                        .unwrap()
                 ));
                 let mut enc = PngEncoder::new(File::create(&path)?);
 

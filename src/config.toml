@@ -1,27 +1,24 @@
 storage_root = "Photos"
-icc = "ProPhotoRGB.icc"
+icc = "/Path/To/ProPhotoRGB.icc"
 color_space = 4
 
 [[outputs]]
-suffix = "sRGB"
-subdir = "JPEG-sRGB"
+subdir = "JPEG/sRGB"
 format = "jpeg"
 quality = 90
-icc = "sRGB.icc"
+icc = "/Path/To/sRGB.icc"
 
 [[outputs]]
-suffix = "sRGB"
-subdir = "JPEG-AdobeRGB"
+subdir = "JPEG/AdobeRGB"
 format = "jpeg"
 quality = 95
-icc = "AdobeRGB1998.icc"
+icc = "/Path/To/AdobeRGB1998.icc"
 
 [[outputs]]
-suffix = "AdobeRGB"
-subdir = "PNG-AdobeRGB"
+subdir = "PNG/AdobeRGB"
 format = "png"
 bit_depth = 16
-icc = "AdobeRGB1998.icc"
+icc = "/Path/To/AdobeRGB1998.icc"
 
 [metadata]
 copy_exif = true
