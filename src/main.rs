@@ -97,7 +97,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let base = PathBuf::from(&config.storage_root).join(name);
     create_dir_all(&base)?;
 
-    let files: Vec<PathBuf> = WalkDir::new(".")
+    let files: Vec<PathBuf> = WalkDir::new(env::current_dir().unwrap())
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| {
@@ -219,7 +219,12 @@ fn process_file(
 
         match out.format.as_str() {
             "jpeg" => {
-                let path = base.join(format!("{}-{}.jpeg", dir, out.suffix));
+                let path = base.join(format!(
+                    "{}/{}-{}.jpeg",
+                    dir,
+                    raw_path.file_name().unwrap().display(),
+                    out.suffix
+                ));
                 let mut writer = BufWriter::new(File::create(&path)?);
                 let mut enc = JpegEncoder::new_with_quality(&mut writer, out.quality.unwrap_or(90));
 
@@ -245,7 +250,12 @@ fn process_file(
             }
 
             "png" => {
-                let path = base.join(format!("{}-{}.png", dir, out.suffix));
+                let path = base.join(format!(
+                    "{}/{}-{}.png",
+                    dir,
+                    raw_path.file_name().unwrap().display(),
+                    out.suffix
+                ));
                 let mut enc = PngEncoder::new(File::create(&path)?);
 
                 if let Some(ref icc) = icc_data {
