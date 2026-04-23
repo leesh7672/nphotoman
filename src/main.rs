@@ -75,6 +75,7 @@ struct OutputConfig {
     format: String,
     quality: Option<u8>,
     icc: Option<String>,
+    subdir: Option<String>,
 }
 
 // ================= MAIN =================
@@ -180,7 +181,6 @@ fn process_file(
 
     let img = result.unwrap();
     let buf: Vec<u8> = img.deref().iter().flat_map(|e| e.to_ne_bytes()).collect();
-    let stem = String::from(raw_path.file_stem().unwrap().to_str().unwrap());
 
     let icc_data_orig = fs::read(config.icc.clone())?;
 
@@ -206,9 +206,20 @@ fn process_file(
             nbuf.copy_from_slice(&buf);
         }
 
+        let path_subdir: PathBuf;
+        let dir: String;
+
+        if let Some(subdir) = &out.subdir {
+            path_subdir = raw_path.join(subdir);
+            create_dir_all(&path_subdir)?;
+            dir = path_subdir.to_str().unwrap().to_string();
+        } else {
+            dir = raw_path.to_str().unwrap().to_string();
+        }
+
         match out.format.as_str() {
             "jpeg" => {
-                let path = base.join(format!("{}-{}.jpeg", stem, out.suffix));
+                let path = base.join(format!("{}-{}.jpeg", dir, out.suffix));
                 let mut writer = BufWriter::new(File::create(&path)?);
                 let mut enc = JpegEncoder::new_with_quality(&mut writer, out.quality.unwrap_or(90));
 
@@ -234,7 +245,7 @@ fn process_file(
             }
 
             "png" => {
-                let path = base.join(format!("{}-{}.png", stem, out.suffix));
+                let path = base.join(format!("{}-{}.png", dir, out.suffix));
                 let mut enc = PngEncoder::new(File::create(&path)?);
 
                 if let Some(ref icc) = icc_data {
