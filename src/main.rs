@@ -145,6 +145,48 @@ fn load_or_create_config() -> Result<Config, Box<dyn std::error::Error>> {
     Ok(config)
 }
 
+// =============== Dithering ==============
+
+fn dither_floyd_steinberg(buf: &[u8], width: usize, height: usize) -> Vec<u8> {
+    let mut out = vec![0u8; width * height * 3];
+    let mut err = vec![0f32; width * height * 3];
+
+    for y in 0..height {
+        for x in 0..width {
+            for c in 0..3 {
+                let idx16 = (y * width + x) * 3 + c;
+                let i16 = idx16 * 2;
+
+                let val16 = u16::from_ne_bytes([buf[i16], buf[i16 + 1]]) as f32;
+
+                let old = val16 + err[idx16];
+                let new = (old / 256.0).round().clamp(0.0, 255.0);
+                let quantized = (new as u8) as f32 * 256.0;
+
+                out[idx16] = new as u8;
+
+                let e = old - quantized;
+
+                // diffusion
+                if x + 1 < width {
+                    err[idx16 + 3] += e * 7.0 / 16.0;
+                }
+                if x > 0 && y + 1 < height {
+                    err[idx16 + (width - 1) * 3] += e * 3.0 / 16.0;
+                }
+                if y + 1 < height {
+                    err[idx16 + width * 3] += e * 5.0 / 16.0;
+                }
+                if x + 1 < width && y + 1 < height {
+                    err[idx16 + (width + 1) * 3] += e * 1.0 / 16.0;
+                }
+            }
+        }
+    }
+
+    out
+}
+
 // ================= CORE =================
 
 fn process_file(
@@ -239,13 +281,10 @@ fn process_file(
 
                 enc.set_exif_metadata(generate_exif(&raw)?)?;
 
-                let mut nbuf8: Vec<u8> = nbuf
-                    .chunks_exact(2)
-                    .map(|e| (u16::from_ne_bytes([e[0], e[1]]) >> 8).try_into().unwrap())
-                    .collect();
+                let nbuf8 = dither_floyd_steinberg(&nbuf, width, height);
 
                 enc.write_image(
-                    nbuf8.by_ref(),
+                    &nbuf8,
                     width.try_into().unwrap(),
                     height.try_into().unwrap(),
                     ExtendedColorType::Rgb8.into(),
