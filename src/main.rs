@@ -146,43 +146,39 @@ fn load_or_create_config() -> Result<Config, Box<dyn std::error::Error>> {
 }
 
 // =============== Dithering ==============
+const BAYER_8X8: [[u8; 8]; 8] = [
+    [0, 48, 12, 60, 3, 51, 15, 63],
+    [32, 16, 44, 28, 35, 19, 47, 31],
+    [8, 56, 4, 52, 11, 59, 7, 55],
+    [40, 24, 36, 20, 43, 27, 39, 23],
+    [2, 50, 14, 62, 1, 49, 13, 61],
+    [34, 18, 46, 30, 33, 17, 45, 29],
+    [10, 58, 6, 54, 9, 57, 5, 53],
+    [42, 26, 38, 22, 41, 25, 37, 21],
+];
 
-fn dither_floyd_steinberg(buf: &[u8], width: usize, height: usize) -> Vec<u8> {
+pub fn dither_parallel(buf: &[u8], width: usize, height: usize) -> Vec<u8> {
     let mut out = vec![0u8; width * height * 3];
-    let mut err = vec![0f32; width * height * 3];
 
-    for y in 0..height {
-        for x in 0..width {
-            for c in 0..3 {
-                let idx16 = (y * width + x) * 3 + c;
-                let i16 = idx16 * 2;
+    out.par_chunks_mut(width * 3)
+        .enumerate()
+        .for_each(|(y, row)| {
+            for x in 0..width {
+                let threshold = BAYER_8X8[y % 8][x % 8] as f32 / 64.0;
 
-                let val16 = u16::from_ne_bytes([buf[i16], buf[i16 + 1]]) as f32;
+                for c in 0..3 {
+                    let idx16 = (y * width + x) * 3 + c;
+                    let i16 = idx16 * 2;
 
-                let old = val16 + err[idx16];
-                let new = (old / 256.0).round().clamp(0.0, 255.0);
-                let quantized = (new as u8) as f32 * 256.0;
+                    let val16 = u16::from_ne_bytes([buf[i16], buf[i16 + 1]]) as f32;
 
-                out[idx16] = new as u8;
+                    let normalized = val16 / 65535.0;
+                    let dithered = (normalized + threshold / 255.0).clamp(0.0, 1.0);
 
-                let e = old - quantized;
-
-                // diffusion
-                if x + 1 < width {
-                    err[idx16 + 3] += e * 7.0 / 16.0;
-                }
-                if x > 0 && y + 1 < height {
-                    err[idx16 + (width - 1) * 3] += e * 3.0 / 16.0;
-                }
-                if y + 1 < height {
-                    err[idx16 + width * 3] += e * 5.0 / 16.0;
-                }
-                if x + 1 < width && y + 1 < height {
-                    err[idx16 + (width + 1) * 3] += e * 1.0 / 16.0;
+                    row[x * 3 + c] = (dithered * 255.0) as u8;
                 }
             }
-        }
-    }
+        });
 
     out
 }
@@ -221,7 +217,11 @@ fn process_file(
     }
 
     let img = result.unwrap();
-    let buf: Vec<u8> = img.deref().iter().flat_map(|e| e.to_ne_bytes()).collect();
+    let buf: Vec<u8> = img
+        .deref()
+        .par_iter()
+        .flat_map(|e| e.to_ne_bytes())
+        .collect();
 
     let icc_data_orig = fs::read(config.icc.clone())?;
 
@@ -281,7 +281,7 @@ fn process_file(
 
                 enc.set_exif_metadata(generate_exif(&raw)?)?;
 
-                let nbuf8 = dither_floyd_steinberg(&nbuf, width, height);
+                let nbuf8 = dither_parallel(&nbuf, width, height);
 
                 enc.write_image(
                     &nbuf8,
