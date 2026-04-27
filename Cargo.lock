@@ -702,6 +702,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "jpegxl-sys"
+version = "0.12.1+libjxl-0.11.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "00cb4f7ffb45ee4327e9ec6ca1a732f3abef470ee008f7d4be3afb414075cd7d"
+dependencies = [
+ "pkg-config",
+]
+
+[[package]]
 name = "js-sys"
 version = "0.3.95"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -894,6 +903,7 @@ dependencies = [
  "crossbeam",
  "dirs",
  "image",
+ "jpegxl-sys",
  "lcms2",
  "little_exif",
  "num_cpus",

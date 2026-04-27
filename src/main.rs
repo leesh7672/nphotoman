@@ -34,6 +34,10 @@ use image::{
     ExtendedColorType, ImageEncoder,
     codecs::{jpeg::JpegEncoder, png::PngEncoder},
 };
+use jpegxl_sys::common::types::*;
+use jpegxl_sys::encoder::encode::*;
+use jpegxl_sys::metadata::codestream_header::JxlBasicInfo;
+use jpegxl_sys::threads::thread_parallel_runner::*;
 use lcms2::{Intent, PixelFormat, Profile, Transform};
 use little_exif::{
     exif_tag::ExifTag,
@@ -234,6 +238,110 @@ fn write_tiff_deflate(
     Ok(())
 }
 
+use std::ffi::c_void;
+use std::ptr;
+
+pub fn encode_jxl(
+    path: &Path,
+    width: usize,
+    height: usize,
+    data: Vec<u8>, // RGB16 (u8 buffer)
+    icc: Option<Vec<u8>>,
+) -> Result<(), String> {
+    unsafe {
+        // ================= Encoder =================
+        let enc = JxlEncoderCreate(ptr::null());
+        if enc.is_null() {
+            return Err("encoder create failed".into());
+        }
+
+        // ================= Parallel runner =================
+        let runner = JxlThreadParallelRunnerCreate(ptr::null(), num_cpus::get());
+
+        JxlEncoderSetParallelRunner(enc, JxlThreadParallelRunner, runner as *mut c_void);
+
+        // ================= Basic Info =================
+        let mut info: JxlBasicInfo = std::mem::zeroed();
+        JxlEncoderInitBasicInfo(&mut info);
+
+        info.xsize = width as u32;
+        info.ysize = height as u32;
+        info.bits_per_sample = 16;
+        info.exponent_bits_per_sample = 0;
+        info.num_color_channels = 3;
+
+        JxlEncoderSetBasicInfo(enc, &info);
+
+        // ================= Color Encoding (ICC) =================
+        if let Some(icc_data) = icc {
+            JxlEncoderSetICCProfile(enc, icc_data.as_ptr(), icc_data.len());
+        }
+
+        // ================= Frame Settings =================
+        let frame = JxlEncoderFrameSettingsCreate(enc, ptr::null());
+
+        // lossless
+        JxlEncoderSetFrameLossless(frame, JxlBool::True);
+
+        // ================= Pixel format =================
+        let pixel_format = JxlPixelFormat {
+            num_channels: 3,
+            data_type: JxlDataType::Uint16,
+            endianness: JxlEndianness::Native,
+            align: 0,
+        };
+
+        let pixels: Vec<u16> = data
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+
+        // ================= Add Image =================
+        JxlEncoderAddImageFrame(
+            frame,
+            &pixel_format,
+            pixels.as_ptr() as *const c_void,
+            pixels.len() * 2,
+        );
+
+        JxlEncoderCloseInput(enc);
+
+        // ================= Output =================
+        let mut output = Vec::new();
+        output.resize(1024 * 1024, 0);
+
+        let mut next_out = output.as_mut_ptr();
+        let mut avail_out = output.len();
+
+        loop {
+            let status = JxlEncoderProcessOutput(enc, &mut next_out, &mut avail_out);
+
+            if status == JxlEncoderStatus::NeedMoreOutput {
+                let used = output.len() - avail_out;
+                output.resize(output.len() * 2, 0);
+                next_out = output.as_mut_ptr().add(used);
+                avail_out = output.len() - used;
+            } else if status == JxlEncoderStatus::Success {
+                let final_size = output.len() - avail_out;
+                output.truncate(final_size);
+                break;
+            } else {
+                return Err("encoding failed".into());
+            }
+        }
+
+        // ================= Write =================
+        let mut f = File::create(path).unwrap();
+        f.write_all(&output).unwrap();
+
+        // ================= Cleanup =================
+        JxlThreadParallelRunnerDestroy(runner);
+        JxlEncoderDestroy(enc);
+    }
+
+    Ok(())
+}
+
 // ================= CORE =================
 
 fn process_file(
@@ -408,8 +516,22 @@ fn process_file(
                     write_tiff_deflate(&path, width, height, &nbuf, &icc, &exif)?;
                 }
 
+                "jxl" => {
+                    let path = base.join(format!(
+                        "{}/{}",
+                        dir,
+                        raw_path
+                            .with_extension("jxl")
+                            .file_name()
+                            .unwrap()
+                            .to_str()
+                            .unwrap()
+                    ));
+                    encode_jxl(&path.as_path(), width, height, nbuf, icc_data)?;
+                }
                 _ => {}
             }
+
             Ok(())
         })();
         if let Err(err) = result {
