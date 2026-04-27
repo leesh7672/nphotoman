@@ -41,10 +41,9 @@ use little_exif::{
     metadata::Metadata,
     rational::{iR64, uR64},
 };
-use num_cpus::get;
-use rayon::{ThreadPoolBuilder, prelude::*};
 use rsraw::RawImage;
 use serde::Deserialize;
+use std::thread;
 use std::{
     env,
     fs::{self, File, create_dir_all},
@@ -125,7 +124,7 @@ const DEFAULT_CONFIG: &str = include_str!("config.toml");
 
 // ================= CONFIG =================
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct Config {
     storage_root: String,
     icc: String,
@@ -134,7 +133,7 @@ struct Config {
     outputs: Vec<OutputConfig>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct OutputConfig {
     format: String,
     quality: Option<u8>,
@@ -143,7 +142,6 @@ struct OutputConfig {
 }
 
 // ================= MAIN =================
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Copyright 2026, Seho Lee.");
 
@@ -161,6 +159,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let base = PathBuf::from(&config.storage_root).join(name);
     create_dir_all(&base)?;
 
+    // ================= Collect input files =================
+
     let files: Vec<PathBuf> = WalkDir::new(".")
         .into_iter()
         .filter_map(|e| e.ok())
@@ -172,10 +172,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|e| e.into_path())
         .collect();
 
-    ThreadPoolBuilder::new()
-        .num_threads(get())
-        .build_global()
-        .ok();
+    // ================= Memory limiter =================
 
     let mem_limit = config
         .memory_limit
@@ -185,31 +182,76 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let limiter = Arc::new(MemLimiter::new(mem_limit));
 
-    files.par_iter().for_each(|f| {
+    // ================= Work queue =================
+
+    let worker_count = num_cpus::get();
+    let queue_size = worker_count * 2;
+
+    let (tx, rx) = crossbeam::channel::bounded::<PathBuf>(queue_size);
+
+    // ================= Producer =================
+
+    let producer = {
+        let tx = tx.clone();
+        thread::spawn(move || {
+            for f in files {
+                // Block when queue is full
+                if tx.send(f).is_err() {
+                    break;
+                }
+            }
+        })
+    };
+
+    // ================= Workers =================
+
+    let mut workers = Vec::new();
+
+    for _ in 0..worker_count {
+        let rx = rx.clone();
+        let base = base.clone();
+        let config = config.clone();
         let limiter = limiter.clone();
 
-        let data = match std::fs::read(f) {
-            Ok(d) => d,
-            Err(_) => return,
-        };
+        let handle = thread::spawn(move || {
+            for f in rx.iter() {
+                // Read file to estimate memory usage
+                let data = match std::fs::read(&f) {
+                    Ok(d) => d,
+                    Err(_) => continue,
+                };
 
-        let raw = match rsraw::RawImage::open(&data) {
-            Ok(r) => r,
-            Err(_) => return,
-        };
+                let raw = match rsraw::RawImage::open(&data) {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                };
 
-        let w = raw.width() as usize;
-        let h = raw.height() as usize;
+                let w = raw.width() as usize;
+                let h = raw.height() as usize;
 
-        let mem = estimate_mem(w, h);
+                let mem = estimate_mem(w, h);
 
-        let _permit = limiter.acquire(mem);
+                // Acquire memory permit
+                let _permit = limiter.acquire(mem);
 
-        if let Err(err) = process_file(f, &base, &config) {
-            println!("Error occurred when processing {}: {}", f.display(), err)
-        }
-        drop(_permit);
-    });
+                // Process file (all original features preserved)
+                if let Err(err) = process_file(&f, &base, &config) {
+                    println!("Error occurred when processing {}: {}", f.display(), err);
+                }
+                // Permit is released automatically when dropped
+            }
+        });
+
+        workers.push(handle);
+    }
+
+    // ================= Join =================
+
+    producer.join().ok();
+
+    for w in workers {
+        w.join().ok();
+    }
 
     Ok(())
 }
