@@ -199,7 +199,7 @@ fn dither(buf: &[u8], width: usize, height: usize) -> Vec<u8> {
 
 // ============== TIFF LZW ================
 
-fn write_tiff_lzw(
+fn write_tiff_deflate(
     path: &Path,
     width: usize,
     height: usize,
@@ -208,9 +208,11 @@ fn write_tiff_lzw(
     exif: &[u8],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let file = BufWriter::new(File::create(path)?);
-    let mut encoder = TiffEncoder::new(file)?.with_compression(tiff::encoder::Compression::Lzw);
+    let mut encoder = TiffEncoder::new(file)?.with_compression(
+        tiff::encoder::Compression::Deflate(tiff::encoder::compression::DeflateLevel::Best),
+    );
 
-    // Create image with LZW compression
+    // Create image with Deflate compression
     let mut image = encoder.new_image::<RGB16>(width as u32, height as u32)?;
 
     // ================= ICC PROFILE =================
@@ -403,7 +405,7 @@ fn process_file(
                         icc_data_orig.clone()
                     };
 
-                    write_tiff_lzw(&path, width, height, &nbuf, &icc, &exif)?;
+                    write_tiff_deflate(&path, width, height, &nbuf, &icc, &exif)?;
                 }
 
                 _ => {}
