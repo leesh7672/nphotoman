@@ -222,14 +222,8 @@ fn write_tiff_lzw(
     image.encoder().write_tag(Tag::Unknown(34665), exif)?;
 
     let v16: Vec<u16> = data
-        .par_chunks(2 * 3 * width)
-        .flat_map(|row| {
-            let r: Vec<u16> = row
-                .chunks_exact(2)
-                .map(|c| u16::from_le_bytes([c[0], c[1]]))
-                .collect();
-            r
-        })
+        .chunks_exact(2)
+        .map(|c| u16::from_le_bytes([c[0], c[1]]))
         .collect();
 
     // Write pixel data
