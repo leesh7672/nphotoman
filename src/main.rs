@@ -210,7 +210,7 @@ fn write_tiff_lzw(
 
     // ================= ICC PROFILE =================
     // Tag 34675 = ICC Profile
-    image.encoder().write_tag(Tag::Unknown(34675), icc)?;
+    image.encoder().write_tag(Tag::IccProfile, icc)?;
 
     // ================= EXIF =================
     // Tag 34665 = EXIF IFD pointer
