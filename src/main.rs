@@ -209,7 +209,7 @@ fn write_tiff_deflate(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let file = BufWriter::new(File::create(path)?);
     let mut encoder = TiffEncoder::new(file)?.with_compression(
-        tiff::encoder::Compression::Deflate(tiff::encoder::compression::DeflateLevel::Best),
+        tiff::encoder::Compression::Deflate(tiff::encoder::compression::DeflateLevel::Balanced),
     );
 
     // Create image with Deflate compression
