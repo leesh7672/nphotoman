@@ -230,141 +230,152 @@ fn process_file(
 
     let icc_data_orig = fs::read(config.icc.clone())?;
 
-    for out in &config.outputs {
-        // ICC load
-        let icc_data = if let Some(path) = &out.icc {
-            Some(fs::read(path)?)
-        } else {
-            None
-        };
+    config.outputs.par_iter().for_each(|out| {
+        let result: Result<(), Box<dyn std::error::Error>> = (|| {
+            // ICC load
+            let icc_data = if let Some(path) = &out.icc {
+                Some(fs::read(path)?)
+            } else {
+                None
+            };
 
-        let mut nbuf = vec![0u8; buf.len()];
-        if let Some(ref icc) = icc_data {
-            nbuf.par_chunks_mut(3 * 2 * width)
-                .enumerate()
-                .zip(buf.par_chunks(3 * 2 * width))
-                .for_each(|(mut o, i)| {
-                    let icc_orig = Profile::new_icc(&icc_data_orig).unwrap();
-                    let icc_new = Profile::new_icc(icc).unwrap();
-                    let transform = Transform::new(
-                        &icc_orig,
-                        PixelFormat::RGB_16,
-                        &icc_new,
-                        PixelFormat::RGB_16,
-                        Intent::Perceptual,
-                    )
-                    .unwrap();
+            let mut nbuf = vec![0u8; buf.len()];
+            if let Some(ref icc) = icc_data {
+                nbuf.par_chunks_mut(3 * 2 * width)
+                    .enumerate()
+                    .zip(buf.par_chunks(3 * 2 * width))
+                    .for_each(|(mut o, i)| {
+                        let icc_orig = Profile::new_icc(&icc_data_orig).unwrap();
+                        let icc_new = Profile::new_icc(icc).unwrap();
+                        let transform = Transform::new(
+                            &icc_orig,
+                            PixelFormat::RGB_16,
+                            &icc_new,
+                            PixelFormat::RGB_16,
+                            Intent::Perceptual,
+                        )
+                        .unwrap();
 
-                    transform.transform_pixels(&i, &mut o.1);
-                });
-        } else {
-            nbuf.copy_from_slice(&buf);
-        }
-
-        let path_subdir: PathBuf;
-        let dir: String;
-
-        if let Some(subdir) = &out.subdir {
-            path_subdir = PathBuf::from(base).join(subdir);
-            create_dir_all(&path_subdir)?;
-            dir = path_subdir.to_str().unwrap().to_string();
-        } else {
-            dir = base.to_str().unwrap().to_string();
-        }
-
-        match out.format.as_str() {
-            "jpeg" => {
-                let path = base.join(format!(
-                    "{}/{}",
-                    dir,
-                    raw_path
-                        .with_extension("jpeg")
-                        .file_name()
-                        .unwrap()
-                        .to_str()
-                        .unwrap()
-                ));
-                let mut writer = BufWriter::new(File::create(&path)?);
-                let mut enc = JpegEncoder::new_with_quality(&mut writer, out.quality.unwrap_or(90));
-
-                if let Some(ref icc) = icc_data {
-                    let _ = enc.set_icc_profile(icc.clone());
-                } else {
-                    let _ = enc.set_icc_profile(icc_data_orig.clone());
-                }
-
-                enc.set_exif_metadata(generate_exif(&raw)?)?;
-
-                let nbuf8 = dither(&nbuf, width, height);
-
-                enc.write_image(
-                    &nbuf8,
-                    width.try_into().unwrap(),
-                    height.try_into().unwrap(),
-                    ExtendedColorType::Rgb8.into(),
-                )?;
+                        transform.transform_pixels(&i, &mut o.1);
+                    });
+            } else {
+                nbuf.copy_from_slice(&buf);
             }
 
-            "png" => {
-                let path = base.join(format!(
-                    "{}/{}",
-                    dir,
-                    raw_path
-                        .with_extension("png")
-                        .file_name()
-                        .unwrap()
-                        .to_str()
-                        .unwrap()
-                ));
-                let mut enc = PngEncoder::new(File::create(&path)?);
+            let path_subdir: PathBuf;
+            let dir: String;
 
-                if let Some(ref icc) = icc_data {
-                    let _ = enc.set_icc_profile(icc.clone());
-                } else {
-                    let _ = enc.set_icc_profile(icc_data_orig.clone());
-                }
-
-                enc.set_exif_metadata(generate_exif(&raw)?)?;
-
-                enc.write_image(
-                    nbuf.by_ref(),
-                    width.try_into().unwrap(),
-                    height.try_into().unwrap(),
-                    ExtendedColorType::Rgb16.into(),
-                )?;
+            if let Some(subdir) = &out.subdir {
+                path_subdir = PathBuf::from(base).join(subdir);
+                create_dir_all(&path_subdir)?;
+                dir = path_subdir.to_str().unwrap().to_string();
+            } else {
+                dir = base.to_str().unwrap().to_string();
             }
 
-            "tiff" => {
-                let path = base.join(format!(
-                    "{}/{}",
-                    dir,
-                    raw_path
-                        .with_extension("tiff")
-                        .file_name()
-                        .unwrap()
-                        .to_str()
-                        .unwrap()
-                ));
+            match out.format.as_str() {
+                "jpeg" => {
+                    let path = base.join(format!(
+                        "{}/{}",
+                        dir,
+                        raw_path
+                            .with_extension("jpeg")
+                            .file_name()
+                            .unwrap()
+                            .to_str()
+                            .unwrap()
+                    ));
+                    let mut writer = BufWriter::new(File::create(&path)?);
+                    let mut enc =
+                        JpegEncoder::new_with_quality(&mut writer, out.quality.unwrap_or(90));
 
-                let mut enc = TiffEncoder::new(File::create(&path)?);
+                    if let Some(ref icc) = icc_data {
+                        let _ = enc.set_icc_profile(icc.clone());
+                    } else {
+                        let _ = enc.set_icc_profile(icc_data_orig.clone());
+                    }
 
-                if let Some(ref icc) = icc_data {
-                    let _ = enc.set_icc_profile(icc.clone());
-                } else {
-                    let _ = enc.set_icc_profile(icc_data_orig.clone());
+                    enc.set_exif_metadata(generate_exif(&raw)?)?;
+
+                    let nbuf8 = dither(&nbuf, width, height);
+
+                    enc.write_image(
+                        &nbuf8,
+                        width.try_into().unwrap(),
+                        height.try_into().unwrap(),
+                        ExtendedColorType::Rgb8.into(),
+                    )?;
                 }
 
-                enc.write_image(
-                    nbuf.by_ref(),
-                    width.try_into().unwrap(),
-                    height.try_into().unwrap(),
-                    ExtendedColorType::Rgb16.into(),
-                )?;
-            }
+                "png" => {
+                    let path = base.join(format!(
+                        "{}/{}",
+                        dir,
+                        raw_path
+                            .with_extension("png")
+                            .file_name()
+                            .unwrap()
+                            .to_str()
+                            .unwrap()
+                    ));
+                    let mut enc = PngEncoder::new(File::create(&path)?);
 
-            _ => {}
+                    if let Some(ref icc) = icc_data {
+                        let _ = enc.set_icc_profile(icc.clone());
+                    } else {
+                        let _ = enc.set_icc_profile(icc_data_orig.clone());
+                    }
+
+                    enc.set_exif_metadata(generate_exif(&raw)?)?;
+
+                    enc.write_image(
+                        nbuf.by_ref(),
+                        width.try_into().unwrap(),
+                        height.try_into().unwrap(),
+                        ExtendedColorType::Rgb16.into(),
+                    )?;
+                }
+
+                "tiff" => {
+                    let path = base.join(format!(
+                        "{}/{}",
+                        dir,
+                        raw_path
+                            .with_extension("tiff")
+                            .file_name()
+                            .unwrap()
+                            .to_str()
+                            .unwrap()
+                    ));
+
+                    let mut enc = TiffEncoder::new(File::create(&path)?);
+
+                    if let Some(ref icc) = icc_data {
+                        let _ = enc.set_icc_profile(icc.clone());
+                    } else {
+                        let _ = enc.set_icc_profile(icc_data_orig.clone());
+                    }
+
+                    enc.write_image(
+                        nbuf.by_ref(),
+                        width.try_into().unwrap(),
+                        height.try_into().unwrap(),
+                        ExtendedColorType::Rgb16.into(),
+                    )?;
+                }
+
+                _ => {}
+            }
+            Ok(())
+        })();
+        if let Err(err) = result {
+            println!(
+                "Error during processing {}: {}.",
+                raw_path.display(),
+                err.to_string()
+            );
         }
-    }
+    });
 
     Ok(())
 }
