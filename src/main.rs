@@ -41,83 +41,19 @@ use little_exif::{
     metadata::Metadata,
     rational::{iR64, uR64},
 };
+use rayon::{ThreadPoolBuilder, prelude::*};
 use rsraw::RawImage;
 use serde::Deserialize;
-use std::thread;
 use std::{
     env,
     fs::{self, File, create_dir_all},
     io::{self, BufWriter, Read, Write},
     ops::Deref,
     path::{Path, PathBuf},
-    sync::{Arc, Condvar, Mutex},
     u8,
 };
 use walkdir::WalkDir;
 
-// ================ MEMORY LIMITER =================
-
-struct MemLimiter {
-    used: Mutex<usize>,
-    cv: Condvar,
-    max: usize,
-}
-
-impl MemLimiter {
-    fn new(max: usize) -> Self {
-        Self {
-            used: Mutex::new(0),
-            cv: Condvar::new(),
-            max,
-        }
-    }
-
-    fn acquire(&self, amount: usize) -> MemPermit<'_> {
-        let mut used = self.used.lock().unwrap();
-        while *used + amount > self.max {
-            used = self.cv.wait(used).unwrap();
-        }
-        *used += amount;
-        MemPermit {
-            limiter: self,
-            amount,
-        }
-    }
-
-    fn release(&self, amount: usize) {
-        let mut used = self.used.lock().unwrap();
-        *used -= amount;
-        self.cv.notify_all();
-    }
-}
-
-struct MemPermit<'a> {
-    limiter: &'a MemLimiter,
-    amount: usize,
-}
-
-impl<'a> Drop for MemPermit<'a> {
-    fn drop(&mut self) {
-        self.limiter.release(self.amount);
-    }
-}
-fn parse_memory(s: &str) -> usize {
-    let s = s.trim().to_uppercase();
-
-    if let Some(n) = s.strip_suffix("G") {
-        n.parse::<usize>().unwrap() * 1024 * 1024 * 1024
-    } else if let Some(n) = s.strip_suffix("M") {
-        n.parse::<usize>().unwrap() * 1024 * 1024
-    } else if let Some(n) = s.strip_suffix("K") {
-        n.parse::<usize>().unwrap() * 1024
-    } else {
-        s.parse::<usize>().unwrap()
-    }
-}
-
-fn estimate_mem(w: usize, h: usize) -> usize {
-    w * h * (3 * 2 + 3 * 2 + 3 * 1 + 3 * 4)
-}
 // ================= DEFAULT CONFIG =================
 
 const DEFAULT_CONFIG: &str = include_str!("config.toml");
@@ -129,7 +65,6 @@ struct Config {
     storage_root: String,
     icc: String,
     color_space: i32,
-    memory_limit: Option<String>,
     outputs: Vec<OutputConfig>,
 }
 
@@ -159,6 +94,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let base = PathBuf::from(&config.storage_root).join(name);
     create_dir_all(&base)?;
 
+    ThreadPoolBuilder::new()
+        .num_threads(num_cpus::get())
+        .build_global()
+        .ok();
+
     // ================= Collect input files =================
 
     let files: Vec<PathBuf> = WalkDir::new(".")
@@ -172,85 +112,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|e| e.into_path())
         .collect();
 
-    // ================= Memory limiter =================
-
-    let mem_limit = config
-        .memory_limit
-        .as_ref()
-        .map(|s| parse_memory(s))
-        .unwrap_or(usize::MAX);
-
-    let limiter = Arc::new(MemLimiter::new(mem_limit));
-
-    // ================= Work queue =================
-
-    let worker_count = num_cpus::get();
-    let queue_size = worker_count * 2;
-
-    let (tx, rx) = crossbeam::channel::bounded::<PathBuf>(queue_size);
-
-    // ================= Producer =================
-
-    let producer = {
-        let tx = tx.clone();
-        thread::spawn(move || {
-            for f in files {
-                // Block when queue is full
-                if tx.send(f).is_err() {
-                    break;
-                }
-            }
-        })
-    };
-
-    // ================= Workers =================
-
-    let mut workers = Vec::new();
-
-    for _ in 0..worker_count {
-        let rx = rx.clone();
-        let base = base.clone();
-        let config = config.clone();
-        let limiter = limiter.clone();
-
-        let handle = thread::spawn(move || {
-            for f in rx.iter() {
-                // Read file to estimate memory usage
-                let data = match std::fs::read(&f) {
-                    Ok(d) => d,
-                    Err(_) => continue,
-                };
-
-                let raw = match rsraw::RawImage::open(&data) {
-                    Ok(r) => r,
-                    Err(_) => continue,
-                };
-
-                let w = raw.width() as usize;
-                let h = raw.height() as usize;
-
-                let mem = estimate_mem(w, h);
-
-                // Acquire memory permit
-                let _permit = limiter.acquire(mem);
-
-                // Process file (all original features preserved)
-                if let Err(err) = process_file(&f, &base, &config) {
-                    println!("Error occurred when processing {}: {}", f.display(), err);
-                }
-                // Permit is released automatically when dropped
-            }
-        });
-
-        workers.push(handle);
-    }
-
-    // ================= Join =================
-
-    producer.join().ok();
-
-    for w in workers {
-        w.join().ok();
+    for file in files {
+        if let Err(err) = process_file(&file, &base, &config) {
+            println!(
+                "Error during processing {}: {}",
+                file.display(),
+                err.to_string()
+            )
+        }
     }
 
     Ok(())
@@ -282,42 +151,39 @@ fn load_or_create_config() -> Result<Config, Box<dyn std::error::Error>> {
 
 // =============== Dithering ==============
 
-fn dither_floyd_steinberg(buf: &[u8], width: usize, height: usize) -> Vec<u8> {
+const BAYER_8X8: [[u8; 8]; 8] = [
+    [0, 48, 12, 60, 3, 51, 15, 63],
+    [32, 16, 44, 28, 35, 19, 47, 31],
+    [8, 56, 4, 52, 11, 59, 7, 55],
+    [40, 24, 36, 20, 43, 27, 39, 23],
+    [2, 50, 14, 62, 1, 49, 13, 61],
+    [34, 18, 46, 30, 33, 17, 45, 29],
+    [10, 58, 6, 54, 9, 57, 5, 53],
+    [42, 26, 38, 22, 41, 25, 37, 21],
+];
+
+fn dither(buf: &[u8], width: usize, height: usize) -> Vec<u8> {
     let mut out = vec![0u8; width * height * 3];
-    let mut err = vec![0f32; width * height * 3];
 
-    for y in 0..height {
-        for x in 0..width {
-            for c in 0..3 {
-                let idx16 = (y * width + x) * 3 + c;
-                let i16 = idx16 * 2;
+    out.par_chunks_mut(width * 3)
+        .enumerate()
+        .for_each(|(y, row)| {
+            for x in 0..width {
+                let threshold = BAYER_8X8[y % 8][x % 8] as f32 / 64.0;
 
-                let val16 = u16::from_ne_bytes([buf[i16], buf[i16 + 1]]) as f32;
+                for c in 0..3 {
+                    let idx16 = (y * width + x) * 3 + c;
+                    let i16 = idx16 * 2;
 
-                let old = val16 + err[idx16];
-                let new = (old / 256.0).round().clamp(0.0, 255.0);
-                let quantized = (new as u8) as f32 * 256.0;
+                    let val16 = u16::from_ne_bytes([buf[i16], buf[i16 + 1]]) as f32;
 
-                out[idx16] = new as u8;
+                    let normalized = val16 / 65535.0;
+                    let dithered = (normalized + threshold / 255.0).clamp(0.0, 1.0);
 
-                let e = old - quantized;
-
-                // diffusion
-                if x + 1 < width {
-                    err[idx16 + 3] += e * 7.0 / 16.0;
-                }
-                if x > 0 && y + 1 < height {
-                    err[idx16 + (width - 1) * 3] += e * 3.0 / 16.0;
-                }
-                if y + 1 < height {
-                    err[idx16 + width * 3] += e * 5.0 / 16.0;
-                }
-                if x + 1 < width && y + 1 < height {
-                    err[idx16 + (width + 1) * 3] += e * 1.0 / 16.0;
+                    row[x * 3 + c] = (dithered * 255.0) as u8;
                 }
             }
-        }
-    }
+        });
 
     out
 }
@@ -356,7 +222,11 @@ fn process_file(
     }
 
     let img = result.unwrap();
-    let buf: Vec<u8> = img.deref().iter().flat_map(|e| e.to_ne_bytes()).collect();
+    let buf: Vec<u8> = img
+        .deref()
+        .par_iter()
+        .flat_map(|e| e.to_ne_bytes())
+        .collect();
 
     let icc_data_orig = fs::read(config.icc.clone())?;
 
@@ -370,14 +240,23 @@ fn process_file(
 
         let mut nbuf = vec![0u8; buf.len()];
         if let Some(ref icc) = icc_data {
-            let transform = Transform::new(
-                &Profile::new_icc(&icc_data_orig)?,
-                PixelFormat::RGB_16,
-                &Profile::new_icc(icc)?,
-                PixelFormat::RGB_16,
-                Intent::Perceptual,
-            )?;
-            transform.transform_pixels(&buf, &mut nbuf);
+            nbuf.par_chunks_mut(3 * 2 * width)
+                .enumerate()
+                .zip(buf.par_chunks(3 * 2 * width))
+                .for_each(|(mut o, i)| {
+                    let icc_orig = Profile::new_icc(&icc_data_orig).unwrap();
+                    let icc_new = Profile::new_icc(icc).unwrap();
+                    let transform = Transform::new(
+                        &icc_orig,
+                        PixelFormat::RGB_16,
+                        &icc_new,
+                        PixelFormat::RGB_16,
+                        Intent::Perceptual,
+                    )
+                    .unwrap();
+
+                    transform.transform_pixels(&i, &mut o.1);
+                });
         } else {
             nbuf.copy_from_slice(&buf);
         }
@@ -416,7 +295,7 @@ fn process_file(
 
                 enc.set_exif_metadata(generate_exif(&raw)?)?;
 
-                let nbuf8 = dither_floyd_steinberg(&nbuf, width, height);
+                let nbuf8 = dither(&nbuf, width, height);
 
                 enc.write_image(
                     &nbuf8,
