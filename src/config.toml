@@ -1,6 +1,7 @@
 storage_root = "Photos"
 icc = "/Path/To/ProPhotoRGB.icc"
 color_space = 4
+memory_limit = "16G"
 
 [[outputs]]
 subdir = "JPEG/sRGB"
