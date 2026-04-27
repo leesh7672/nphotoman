@@ -51,10 +51,74 @@ use std::{
     io::{self, BufWriter, Read, Write},
     ops::Deref,
     path::{Path, PathBuf},
+    sync::{Arc, Condvar, Mutex},
     u8,
 };
 use walkdir::WalkDir;
 
+// ================ MEMORY LIMITER =================
+
+struct MemLimiter {
+    used: Mutex<usize>,
+    cv: Condvar,
+    max: usize,
+}
+
+impl MemLimiter {
+    fn new(max: usize) -> Self {
+        Self {
+            used: Mutex::new(0),
+            cv: Condvar::new(),
+            max,
+        }
+    }
+
+    fn acquire(&self, amount: usize) -> MemPermit<'_> {
+        let mut used = self.used.lock().unwrap();
+        while *used + amount > self.max {
+            used = self.cv.wait(used).unwrap();
+        }
+        *used += amount;
+        MemPermit {
+            limiter: self,
+            amount,
+        }
+    }
+
+    fn release(&self, amount: usize) {
+        let mut used = self.used.lock().unwrap();
+        *used -= amount;
+        self.cv.notify_all();
+    }
+}
+
+struct MemPermit<'a> {
+    limiter: &'a MemLimiter,
+    amount: usize,
+}
+
+impl<'a> Drop for MemPermit<'a> {
+    fn drop(&mut self) {
+        self.limiter.release(self.amount);
+    }
+}
+fn parse_memory(s: &str) -> usize {
+    let s = s.trim().to_uppercase();
+
+    if let Some(n) = s.strip_suffix("G") {
+        n.parse::<usize>().unwrap() * 1024 * 1024 * 1024
+    } else if let Some(n) = s.strip_suffix("M") {
+        n.parse::<usize>().unwrap() * 1024 * 1024
+    } else if let Some(n) = s.strip_suffix("K") {
+        n.parse::<usize>().unwrap() * 1024
+    } else {
+        s.parse::<usize>().unwrap()
+    }
+}
+
+fn estimate_mem(w: usize, h: usize) -> usize {
+    w * h * (3 * 2 + 3 * 2 + 3 * 1 + 3 * 4)
+}
 // ================= DEFAULT CONFIG =================
 
 const DEFAULT_CONFIG: &str = include_str!("config.toml");
@@ -66,6 +130,7 @@ struct Config {
     storage_root: String,
     icc: String,
     color_space: i32,
+    memory_limit: Option<String>,
     outputs: Vec<OutputConfig>,
 }
 
@@ -112,10 +177,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build_global()
         .ok();
 
+    let mem_limit = config
+        .memory_limit
+        .as_ref()
+        .map(|s| parse_memory(s))
+        .unwrap_or(usize::MAX);
+
+    let limiter = Arc::new(MemLimiter::new(mem_limit));
+
     files.par_iter().for_each(|f| {
+        let limiter = limiter.clone();
+
+        let data = match std::fs::read(f) {
+            Ok(d) => d,
+            Err(_) => return,
+        };
+
+        let raw = match rsraw::RawImage::open(&data) {
+            Ok(r) => r,
+            Err(_) => return,
+        };
+
+        let w = raw.width() as usize;
+        let h = raw.height() as usize;
+
+        let mem = estimate_mem(w, h);
+
+        let _permit = limiter.acquire(mem);
+
         if let Err(err) = process_file(f, &base, &config) {
             println!("Error occurred when processing {}: {}", f.display(), err)
         }
+        drop(_permit);
     });
 
     Ok(())
