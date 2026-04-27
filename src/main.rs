@@ -32,7 +32,7 @@ End of Terms
 
 use image::{
     ExtendedColorType, ImageEncoder,
-    codecs::{jpeg::JpegEncoder, png::PngEncoder, tiff::TiffEncoder},
+    codecs::{jpeg::JpegEncoder, png::PngEncoder},
 };
 use lcms2::{Intent, PixelFormat, Profile, Transform};
 use little_exif::{
@@ -51,6 +51,10 @@ use std::{
     ops::Deref,
     path::{Path, PathBuf},
     u8,
+};
+use tiff::{
+    encoder::{TiffEncoder, colortype::RGB16},
+    tags::Tag,
 };
 use walkdir::WalkDir;
 
@@ -186,6 +190,42 @@ fn dither(buf: &[u8], width: usize, height: usize) -> Vec<u8> {
         });
 
     out
+}
+
+// ============== TIFF LZW ================
+
+fn write_tiff_lzw(
+    path: &Path,
+    width: usize,
+    height: usize,
+    data: &[u8],
+    icc: &[u8],
+    exif: &[u8],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let file = BufWriter::new(File::create(path)?);
+    let mut encoder = TiffEncoder::new(file)?.with_compression(tiff::encoder::Compression::Lzw);
+
+    // Create image with LZW compression
+    let mut image = encoder.new_image::<RGB16>(width as u32, height as u32)?;
+
+    // ================= ICC PROFILE =================
+    // Tag 34675 = ICC Profile
+    image.encoder().write_tag(Tag::Unknown(34675), icc)?;
+
+    // ================= EXIF =================
+    // Tag 34665 = EXIF IFD pointer
+    image.encoder().write_tag(Tag::Unknown(34665), exif)?;
+
+    let v16: Vec<u16> = data
+        .chunks_exact(2)
+        .par_bridge()
+        .map(|c| u16::from_ne_bytes([c[0], c[1]]))
+        .collect();
+
+    // Write pixel data
+    image.write_data(&v16)?;
+
+    Ok(())
 }
 
 // ================= CORE =================
@@ -351,20 +391,15 @@ fn process_file(
                             .unwrap()
                     ));
 
-                    let mut enc = TiffEncoder::new(File::create(&path)?);
+                    let exif = generate_exif(&raw)?;
 
-                    if let Some(ref icc) = icc_data {
-                        let _ = enc.set_icc_profile(icc.clone());
+                    let icc = if let Some(ref icc) = icc_data {
+                        icc.clone()
                     } else {
-                        let _ = enc.set_icc_profile(icc_data_orig.clone());
-                    }
+                        icc_data_orig.clone()
+                    };
 
-                    enc.write_image(
-                        nbuf.by_ref(),
-                        width.try_into().unwrap(),
-                        height.try_into().unwrap(),
-                        ExtendedColorType::Rgb16.into(),
-                    )?;
+                    write_tiff_lzw(&path, width, height, &nbuf, &icc, &exif)?;
                 }
 
                 _ => {}
