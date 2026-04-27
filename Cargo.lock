@@ -897,6 +897,7 @@ dependencies = [
  "lcms2",
  "little_exif",
  "num_cpus",
+ "rayon",
  "rsraw",
  "serde",
  "toml",
