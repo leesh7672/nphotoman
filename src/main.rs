@@ -184,7 +184,7 @@ fn dither(buf: &[u8], width: usize, height: usize) -> Vec<u8> {
                     let idx16 = (y * width + x) * 3 + c;
                     let i16 = idx16 * 2;
 
-                    let val16 = u16::from_ne_bytes([buf[i16], buf[i16 + 1]]) as f32;
+                    let val16 = u16::from_le_bytes([buf[i16], buf[i16 + 1]]) as f32;
 
                     let normalized = val16 / 65535.0;
                     let dithered = (normalized + threshold / 255.0).clamp(0.0, 1.0);
