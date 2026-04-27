@@ -354,8 +354,6 @@ fn process_file(
                     let _ = enc.set_icc_profile(icc_data_orig.clone());
                 }
 
-                enc.set_exif_metadata(generate_exif(&raw)?)?;
-
                 enc.write_image(
                     nbuf.by_ref(),
                     width.try_into().unwrap(),
