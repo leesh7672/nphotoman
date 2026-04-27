@@ -69,6 +69,7 @@ struct Config {
     storage_root: String,
     icc: String,
     color_space: i32,
+    jobs: Option<usize>,
     outputs: Vec<OutputConfig>,
 }
 
@@ -116,15 +117,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|e| e.into_path())
         .collect();
 
-    for file in files {
-        if let Err(err) = process_file(&file, &base, &config) {
-            println!(
-                "Error during processing {}: {}",
-                file.display(),
-                err.to_string()
-            )
-        }
-    }
+    files
+        .par_chunks(files.len() / (config.jobs.unwrap_or(4) - 1))
+        .for_each(|files| {
+            for file in files {
+                if let Err(err) = process_file(&file, &base, &config) {
+                    println!(
+                        "Error during processing {}: {}",
+                        file.display(),
+                        err.to_string()
+                    )
+                }
+            }
+        });
 
     Ok(())
 }
