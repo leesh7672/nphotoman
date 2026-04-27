@@ -32,7 +32,7 @@ End of Terms
 
 use image::{
     ExtendedColorType, ImageEncoder,
-    codecs::{jpeg::JpegEncoder, png::PngEncoder},
+    codecs::{jpeg::JpegEncoder, png::PngEncoder, tiff::TiffEncoder},
 };
 use lcms2::{Intent, PixelFormat, Profile, Transform};
 use little_exif::{
@@ -317,6 +317,36 @@ fn process_file(
                         .unwrap()
                 ));
                 let mut enc = PngEncoder::new(File::create(&path)?);
+
+                if let Some(ref icc) = icc_data {
+                    let _ = enc.set_icc_profile(icc.clone());
+                } else {
+                    let _ = enc.set_icc_profile(icc_data_orig.clone());
+                }
+
+                enc.set_exif_metadata(generate_exif(&raw)?)?;
+
+                enc.write_image(
+                    nbuf.by_ref(),
+                    width.try_into().unwrap(),
+                    height.try_into().unwrap(),
+                    ExtendedColorType::Rgb16.into(),
+                )?;
+            }
+
+            "tiff" => {
+                let path = base.join(format!(
+                    "{}/{}",
+                    dir,
+                    raw_path
+                        .with_extension("tiff")
+                        .file_name()
+                        .unwrap()
+                        .to_str()
+                        .unwrap()
+                ));
+
+                let mut enc = TiffEncoder::new(File::create(&path)?);
 
                 if let Some(ref icc) = icc_data {
                     let _ = enc.set_icc_profile(icc.clone());
