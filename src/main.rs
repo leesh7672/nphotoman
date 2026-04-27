@@ -52,6 +52,7 @@ use std::{
     env,
     fs::{self, File, create_dir_all},
     io::{self, BufWriter, Read, Write},
+    mem::MaybeUninit,
     ops::Deref,
     path::{Path, PathBuf},
     u8,
@@ -261,7 +262,10 @@ pub fn encode_jxl(
         JxlEncoderSetParallelRunner(enc, JxlThreadParallelRunner, runner as *mut c_void);
 
         // ================= Basic Info =================
-        let mut info: JxlBasicInfo = std::mem::zeroed();
+        let mut info = MaybeUninit::<JxlBasicInfo>::uninit();
+        JxlEncoderInitBasicInfo(info.as_mut_ptr());
+
+        let mut info = info.assume_init();
         JxlEncoderInitBasicInfo(&mut info);
 
         info.xsize = width as u32;
