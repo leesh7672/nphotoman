@@ -244,20 +244,23 @@ fn process_file(
                 nbuf.par_chunks_mut(3 * 2 * width)
                     .enumerate()
                     .zip(buf.par_chunks(3 * 2 * width))
-                    .for_each(|(mut o, i)| {
-                        let icc_orig = Profile::new_icc(&icc_data_orig).unwrap();
-                        let icc_new = Profile::new_icc(icc).unwrap();
-                        let transform = Transform::new(
-                            &icc_orig,
-                            PixelFormat::RGB_16,
-                            &icc_new,
-                            PixelFormat::RGB_16,
-                            Intent::Perceptual,
-                        )
-                        .unwrap();
-
-                        transform.transform_pixels(&i, &mut o.1);
-                    });
+                    .for_each_init(
+                        || {
+                            let icc_orig = Profile::new_icc(&icc_data_orig).unwrap();
+                            let icc_new = Profile::new_icc(icc).unwrap();
+                            Transform::new(
+                                &icc_orig,
+                                PixelFormat::RGB_16,
+                                &icc_new,
+                                PixelFormat::RGB_16,
+                                Intent::Perceptual,
+                            )
+                            .unwrap()
+                        },
+                        |transform, (mut o, i)| {
+                            transform.transform_pixels(&i, &mut o.1);
+                        },
+                    );
             } else {
                 nbuf.copy_from_slice(&buf);
             }
