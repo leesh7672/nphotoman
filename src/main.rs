@@ -132,12 +132,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             loop {
                 let file: PathBuf;
                 {
-                    file = (*ref_files.lock().unwrap())
+                    let e = (*ref_files.lock().unwrap())
                         .pop()
-                        .clone()
-                        .unwrap()
-                        .deref()
                         .clone();
+                    if e.is_none() {
+                        return;
+                    }
+                    file =  e.unwrap().deref().clone();
                 }
                 if let Err(err) = process_file(&file, &base_clone, &config_clone) {
                     println!(
