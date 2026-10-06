@@ -45,9 +45,10 @@ use little_exif::{
     metadata::Metadata,
     rational::{iR64, uR64},
 };
-use rayon::{ThreadPoolBuilder, prelude::*};
 use rsraw::RawImage;
 use serde::Deserialize;
+use std::sync::{Arc, Mutex};
+use std::thread;
 use std::{
     env,
     fs::{self, File, create_dir_all},
@@ -104,29 +105,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let base = PathBuf::from(&config.storage_root).join(name);
     create_dir_all(&base)?;
 
-    ThreadPoolBuilder::new()
-        .num_threads(num_cpus::get())
-        .build_global()
-        .ok();
-
     // ================= Collect input files =================
 
-    let files: Vec<PathBuf> = WalkDir::new(".")
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path()
-                .extension()
-                .map_or(false, |e| e.eq_ignore_ascii_case(ext))
-        })
-        .map(|e| e.into_path())
-        .collect();
+    let files: Arc<Mutex<Vec<Arc<PathBuf>>>> = Arc::new(Mutex::new(
+        WalkDir::new(".")
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.path()
+                    .extension()
+                    .map_or(false, |e| e.eq_ignore_ascii_case(ext))
+            })
+            .map(|e| Arc::new(e.into_path()))
+            .collect(),
+    ));
 
-    files
-        .par_chunks(files.len() / (config.jobs.unwrap_or(4) - 1))
-        .for_each(|files| {
-            for file in files {
-                if let Err(err) = process_file(&file, &base, &config) {
+    // ================= Process files =================
+
+    let mut handles = Vec::new();
+
+    for _ in 0..config.jobs.unwrap_or(4) {
+        let config_clone = config.clone();
+        let base_clone = base.clone();
+        let ref_files = files.clone();
+        handles.push(thread::spawn(move || {
+            loop {
+                let file: PathBuf;
+                {
+                    file = (*ref_files.lock().unwrap())
+                        .pop()
+                        .clone()
+                        .unwrap()
+                        .deref()
+                        .clone();
+                }
+                if let Err(err) = process_file(&file, &base_clone, &config_clone) {
                     println!(
                         "Error during processing {}: {}",
                         file.display(),
@@ -134,7 +147,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     )
                 }
             }
-        });
+        }));
+    }
+
+    loop {
+        let handle = handles.pop();
+        if handle.is_none() {
+            break;
+        }
+        let handle = handle.unwrap();
+        handle.join().unwrap();
+    }
 
     Ok(())
 }
@@ -179,25 +202,23 @@ const BAYER_8X8: [[u8; 8]; 8] = [
 fn dither(buf: &[u8], width: usize, height: usize) -> Vec<u8> {
     let mut out = vec![0u8; width * height * 3];
 
-    out.par_chunks_mut(width * 3)
-        .enumerate()
-        .for_each(|(y, row)| {
-            for x in 0..width {
-                let threshold = BAYER_8X8[y % 8][x % 8] as f32 / 64.0;
+    out.chunks_mut(width * 3).enumerate().for_each(|(y, row)| {
+        for x in 0..width {
+            let threshold = BAYER_8X8[y % 8][x % 8] as f32 / 64.0;
 
-                for c in 0..3 {
-                    let idx16 = (y * width + x) * 3 + c;
-                    let i16 = idx16 * 2;
+            for c in 0..3 {
+                let idx16 = (y * width + x) * 3 + c;
+                let i16 = idx16 * 2;
 
-                    let val16 = u16::from_le_bytes([buf[i16], buf[i16 + 1]]) as f32;
+                let val16 = u16::from_le_bytes([buf[i16], buf[i16 + 1]]) as f32;
 
-                    let normalized = val16 / 65535.0;
-                    let dithered = (normalized + threshold / 255.0).clamp(0.0, 1.0);
+                let normalized = val16 / 65535.0;
+                let dithered = (normalized + threshold / 255.0).clamp(0.0, 1.0);
 
-                    row[x * 3 + c] = (dithered * 255.0) as u8;
-                }
+                row[x * 3 + c] = (dithered * 255.0) as u8;
             }
-        });
+        }
+    });
 
     out
 }
@@ -380,15 +401,11 @@ fn process_file(
     }
 
     let img = result.unwrap();
-    let buf: Vec<u8> = img
-        .deref()
-        .par_iter()
-        .flat_map(|e| e.to_ne_bytes())
-        .collect();
+    let buf: Vec<u8> = img.deref().iter().flat_map(|e| e.to_ne_bytes()).collect();
 
     let icc_data_orig = fs::read(config.icc.clone())?;
 
-    config.outputs.par_iter().for_each(|out| {
+    config.outputs.iter().for_each(|out| {
         let result: Result<(), Box<dyn std::error::Error>> = (|| {
             // ICC load
             let icc_data = if let Some(path) = &out.icc {
@@ -399,26 +416,17 @@ fn process_file(
 
             let mut nbuf = vec![0u8; buf.len()];
             if let Some(ref icc) = icc_data {
-                nbuf.par_chunks_mut(3 * 2 * width)
-                    .enumerate()
-                    .zip(buf.par_chunks(3 * 2 * width))
-                    .for_each_init(
-                        || {
-                            let icc_orig = Profile::new_icc(&icc_data_orig).unwrap();
-                            let icc_new = Profile::new_icc(icc).unwrap();
-                            Transform::new(
-                                &icc_orig,
-                                PixelFormat::RGB_16,
-                                &icc_new,
-                                PixelFormat::RGB_16,
-                                Intent::Perceptual,
-                            )
-                            .unwrap()
-                        },
-                        |transform, (mut o, i)| {
-                            transform.transform_pixels(&i, &mut o.1);
-                        },
-                    );
+                let icc_orig = Profile::new_icc(&icc_data_orig).unwrap();
+                let icc_new = Profile::new_icc(icc).unwrap();
+                Transform::new(
+                    &icc_orig,
+                    PixelFormat::RGB_16,
+                    &icc_new,
+                    PixelFormat::RGB_16,
+                    Intent::Perceptual,
+                )
+                .unwrap()
+                .transform_pixels(&buf, &mut nbuf);
             } else {
                 nbuf.copy_from_slice(&buf);
             }
